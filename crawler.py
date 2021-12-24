@@ -1,39 +1,9 @@
-from orator import DatabaseManager
-from orator import Model
-import sqlite3
+import requests
 
-'''
-mysql_config = {
-    'default': 'local',
-    'local': {
-        'driver': 'sqlite',
-        'host': 'localhost',
-        'database': 'content',
-        'user': 'root',
-        'password': '',
-        'prefix': '',
-        'log_queries': True
-    }
-}
+url = 'https://api.zsxq.com/v2/groups/15281118415522/topics?scope=all&count=20'
+cookies = {"Cookie":'zsxq_access_token=A5B570DE-AFCD-71DA-6D3D-11B0E79664A6_07FED59ED2AA2EEA'}
+headers = {'user-agent':'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML,like Gecko) Chrome/96.0.4664.110 Safari/537.36', }
 
-db = DatabaseManager(mysql_config)
+responese = requests.get(url, cookies=cookies, headers = headers).content
 
-def connect_db():
-    db.set_default_connection('local')
-    Model.set_connection_resolver(db)
-
-def post_topics(group_id: int, text: str = '', creat_time: str = ''):
-    query = db.table('topics').insert(group_id = group_id, text = text, creat_time = creat_time)
-
-if __name__ == '__main__':
-#    connect_db()
-
-#    post_topics(121214, 'dfsdfdsfdsf', '1010101')'''
-
-if __name__ == '__main__':
-    db = sqlite3.connect('content.db')
-    cursor = db.cursor()
-    cursor.execute('insert into topics (group_id, text, creat_time) values (\'1212\', \'Michael\', \'20211213\')')
-    cursor.close()
-    db.commit()
-    db.close()
+print(requests.get(url, cookies=cookies, headers = headers).status_code)
