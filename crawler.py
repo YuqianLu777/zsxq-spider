@@ -4,6 +4,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 import time
+import datetime
 
 global json_buffer
 
@@ -11,15 +12,16 @@ def initiate():
 
     # -*- iniate settings -*-
     chrome_options = webdriver.ChromeOptions()
+    chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:5555")
     chrome_options.add_argument('--ignore-certificate-errors')
     chrome_options.add_argument('--ignore-ssl-errors')
     chrome_options.add_argument('log-level=3')
-    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation','enable-logging'])
+#    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation','enable-logging'])
     executable_path = "C:\Program Files\Google\Chrome\Application\chromedriver.exe"
     index_url = 'https://wx.zsxq.com/'
     mypage_url = 'https://api.zsxq.com/v2/groups/48844244242848/topics?scope=all&count=20'
     chrome_ser = Service(executable_path)
-    browser = webdriver.Chrome(options = chrome_options, service = chrome_ser)
+    browser = webdriver.Chrome(service = chrome_ser, chrome_options=chrome_options)
 
     browser.get(index_url)
     
@@ -43,6 +45,7 @@ def initiate():
                     return browser
                 else:
                     browser.refresh()
+                    browser.implicitly_wait(1.5)
                     print('刷新页面')
                     i += 1
         else:
@@ -56,6 +59,34 @@ def html2json(html:str):
     res = json.loads(cc.text)
     return res
 
+def get_download_url(browser, href):
+    no_handles = len(browser.window_handles)
+    browser.execute_script("window.open();")
+    browser.switch_to.window(browser.window_handles[no_handles])
+    browser.get(href)
+    json = html2json(browser.page_source)
+    i = 0
+    while i < 5:
+        time.sleep(1.5)
+        flag = json['succeeded']
+        if flag == True:
+            browser.close()
+            browser.switch_to.window(browser.window_handles[no_handles-1])
+            return json['resp_data']['download_url']
+        else:
+            browser.refresh()
+            json = html2json(browser.page_source)
+            time.sleep(1.5)
+            print('刷新下载链接页面')
+            i += 1
+    if i==5: 
+        print("取不到文件下载链接！")
+        time.sleep(999)
+#        browser.close()
+#        browser.switch_to.window(browser.window_handles[no_handles-1])
+        return False
+    
+
 def fetch_content(browser, group_no, no_page):
     group_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20'
     browser.execute_script("window.open();")
@@ -65,14 +96,51 @@ def fetch_content(browser, group_no, no_page):
     
     global json_buffer
     json_buffer = html2json(browser.page_source)
-    topics = json_buffer['resp_data']['topics']
-    print(topics)
+    i = 0
+    while i < 5:
+        flag = html2json(browser.page_source)['succeeded']
+        if flag == True:
+            topics = json_buffer['resp_data']['topics']
+            break
+        else:
+            browser.refresh()
+            browser.implicitly_wait(1.5)
+            json_buffer = html2json(browser.page_source)
+            print('刷新页面')
+            i += 1
+    if i==5: 
+        print("取不到页面内容！")
+        print(html2json(browser.page_source))
+        return False
     
+    f = open("data.txt","w+",encoding="utf-8")
+    f.write(str(datetime.datetime.now())+'\n')
+    for item in topics:
+        content_type = item['type']
+        create_time = item['create_time']
+        f.write(create_time+'\n')
+        if content_type == 'talk':
+            text = item['talk']['text']
+            f.write(text+'\n')
+            if item['talk'].get('files'):
+                for each_file in item['talk']['files']:
+                    href = 'https://api.zsxq.com/v2/files/' + str(each_file['file_id']) + '/download_url'
+                    download_url = get_download_url(browser, href) 
+                    f.write(each_file['name']+'\n')
+                    f.write(download_url+'\n')
+        elif content_type == 'q&a':
+            text = item['question']['text']+'\n'+item['answer']['text']
+            f.write(text+'\n')
+        f.write('\n')
+    f.close()
+    
+    browser.close()
+    browser.switch_to.window(browser.window_handles[no_handles-1])
     return True
 
 if __name__ == "__main__":
     browser = initiate()
-    fetch_content(browser, 48844244242848, 1)
+    fetch_content(browser, 51122528441224, 1)
     time.sleep(999)
     print(link.status_code)
     print(link.content)
