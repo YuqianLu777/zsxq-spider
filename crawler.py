@@ -1,3 +1,5 @@
+#Next Step, 扩展fetch_content方法至多页，参数为browser, group_no, start_time, no_page
+
 from bs4 import BeautifulSoup
 import json
 from selenium import webdriver
@@ -5,23 +7,26 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 import time
 import datetime
+from peewee import *
+from db_init import Topic, File
 
 global json_buffer
 
 def initiate():
 
     # -*- iniate settings -*-
-    chrome_options = webdriver.ChromeOptions()
+#   CMD启动Chrome命令 "c:\Program Files\Google\Chrome\Application\chrome.exe" --remote-debugging-port=5555 --user-data-dir="C:\selenium\AutomationProfile" 前提是该文件夹已存在 
+    chrome_options = Options()
     chrome_options.add_experimental_option("debuggerAddress", "127.0.0.1:5555")
     chrome_options.add_argument('--ignore-certificate-errors')
     chrome_options.add_argument('--ignore-ssl-errors')
     chrome_options.add_argument('log-level=3')
 #    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation','enable-logging'])
-    executable_path = "C:\Program Files\Google\Chrome\Application\chromedriver.exe"
+    executable_path = "C:\Program Files\Google\Chrome\Application\chromedriver.exe" #注意检查chrome driver版本#
     index_url = 'https://wx.zsxq.com/'
-    mypage_url = 'https://api.zsxq.com/v2/groups/48844244242848/topics?scope=all&count=20'
+    mypage_url = 'https://api.zsxq.com/v2/groups/48844244242848/topics?scope=all&count=20' #用自己主页测试#
     chrome_ser = Service(executable_path)
-    browser = webdriver.Chrome(service = chrome_ser, chrome_options=chrome_options)
+    browser = webdriver.Chrome(service = chrome_ser, options=chrome_options)
 
     browser.get(index_url)
     
@@ -42,6 +47,7 @@ def initiate():
 #                    json_buffer = html2json(browser.page_source)
                     browser.close()
                     browser.switch_to.window(handles[0])
+                    print('Selenium启动成功')
                     return browser
                 else:
                     browser.refresh()
@@ -85,10 +91,16 @@ def get_download_url(browser, href):
 #        browser.close()
 #        browser.switch_to.window(browser.window_handles[no_handles-1])
         return False
-    
+
+def trans2datatime(input_time:str):
+    date = input_time[0:10]
+    time = input_time[11:23]
+    return(date + ' ' + time)
 
 def fetch_content(browser, group_no, no_page):
     group_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20'
+    db = SqliteDatabase('zsxq.db')
+    db.connect()
     browser.execute_script("window.open();")
     handles = browser.window_handles
     browser.switch_to.window(handles[1])
@@ -117,11 +129,14 @@ def fetch_content(browser, group_no, no_page):
     f.write(str(datetime.datetime.now())+'\n')
     for item in topics:
         content_type = item['type']
-        create_time = item['create_time']
+        create_time = trans2datatime(item['create_time'])
         f.write(create_time+'\n')
         if content_type == 'talk':
             text = item['talk']['text']
             f.write(text+'\n')
+            new_talk = Topic(topic_id = item['topic_id'], create_time = create_time, group_id = item['group']['group_id'], topic_content = text)
+            new_talk.save()
+            sleep(999)
             if item['talk'].get('files'):
                 for each_file in item['talk']['files']:
                     href = 'https://api.zsxq.com/v2/files/' + str(each_file['file_id']) + '/download_url'
