@@ -1,4 +1,6 @@
 #Next Step, 扩展fetch_content方法至多页，参数为browser, group_no, start_time, no_page
+#Step1：翻页并抓取每一页，code完成，没有测试
+#Step2：直接把create_time保存为datetime格式，db中直接存datetime格式（未完成）
 
 from bs4 import BeautifulSoup
 import json
@@ -6,7 +8,7 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 import time
-import datetime
+from datetime import datetime,timedelta
 from peewee import *
 from db_init import Topic, File
 
@@ -92,65 +94,127 @@ def get_download_url(browser, href):
 #        browser.switch_to.window(browser.window_handles[no_handles-1])
         return False
 
-def trans2datatime(input_time:str):
+def trans2datetime(input_time:str):
     date = input_time[0:10]
     time = input_time[11:23]
     return(date + ' ' + time)
 
-def fetch_content(browser, group_no, no_page):
+def fetch_content(browser, group_no, max_page, end_time, start_time):
+#end_time = 抓取的截止时间（包含该时点），start_time = 抓取的开始时间（包含该时点），max_page = 抓取的最大页数
+#browser, group_no, start_time, no_page
+
+'''该方法return一个数组（状态，记录条数，最早时间，最晚时间）
+连接数据库
+
+for iterator < max_page:
+    selenium打开新页面
+    browser.get(get_url(end_time))
+    
+    确保正确打开页面
+    if 此时end_time晚于start_time，则断开数据库连接 正常return
+    get页面上的topics数量
+    如果获取到的topics小于20，是否意味着已经到底？？？则获取完页面后断开数据库连接并return
+    获取该页面上最新时间，if该时间早于start_time，遍历找到晚于等于start_time的最早topics，并更新页面上的topics数量
+    
+    循环处理范围内的topics:talk、Q%A、file_url
+    case: talk & Q&A 查重并写入文本数据库
+    case：file_url 查重并写入url数据库
+    
+    更新end_time
+    selenium关闭页面
+
+正常return
+'''
+    
+
     group_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20'
-    db = SqliteDatabase('zsxq.db')
+    #db = SqliteDatabase('zsxq.db')
+    db = SqliteDatabase('test.db')
     db.connect()
     browser.execute_script("window.open();")
     handles = browser.window_handles
-    browser.switch_to.window(handles[1])
+    browser.switch_to.window(handles[-1])#[-1]是最新窗口
     browser.get(group_url)
     
-    global json_buffer
-    json_buffer = html2json(browser.page_source)
-    i = 0
-    while i < 5:
-        flag = html2json(browser.page_source)['succeeded']
-        if flag == True:
-            topics = json_buffer['resp_data']['topics']
-            break
-        else:
-            browser.refresh()
-            browser.implicitly_wait(1.5)
-            json_buffer = html2json(browser.page_source)
-            print('刷新页面')
-            i += 1
-    if i==5: 
-        print("取不到页面内容！")
-        print(html2json(browser.page_source))
-        return False
+    new_talk_list = []
+    new_file_list = []
+    last_time = datetime.now()
+    for i from range[1:max_page+1]:
+   
+       #获取当前页面json，最多尝试5次，失败则返回异常
+        global json_buffer
+        json_buffer = html2json(browser.page_source)
+        i = 0
+        while i < 5:
+            flag = html2json(browser.page_source)['succeeded']
+            if flag == True:
+                topics = json_buffer['resp_data']['topics']
+                break
+            else:
+                browser.refresh()
+                browser.implicitly_wait(1.5)
+                json_buffer = html2json(browser.page_source)
+                print('刷新页面')
+                i += 1
+        if i==5: 
+            print("取不到页面内容！")
+            print(html2json(browser.page_source))
+            return False
     
-    f = open("data.txt","w+",encoding="utf-8")
-    f.write(str(datetime.datetime.now())+'\n')
+    #获取一次刷新下的所有内容（file类型的不下载）
+    #f = open("data.txt","w+",encoding="utf-8")
+    #f.write(str(datetime.now())+'\n')
     for item in topics:
         content_type = item['type']
-        create_time = trans2datatime(item['create_time'])
+        create_time = trans2datetime(item['create_time'])
         f.write(create_time+'\n')
         if content_type == 'talk':
             text = item['talk']['text']
-            f.write(text+'\n')
-            new_talk = Topic(topic_id = item['topic_id'], create_time = create_time, group_id = item['group']['group_id'], topic_content = text)
-            new_talk.save()
-            sleep(999)
+            #f.write(text+'\n')
+            new_talk_list.append = ({ 
+                        'topic_id': item['topic_id'],
+                        'create_time': create_time,
+                        'group_id': item['group']['group_id'],
+                        'topic_content': text
+                        })
             if item['talk'].get('files'):
                 for each_file in item['talk']['files']:
                     href = 'https://api.zsxq.com/v2/files/' + str(each_file['file_id']) + '/download_url'
                     download_url = get_download_url(browser, href) 
-                    f.write(each_file['name']+'\n')
-                    f.write(download_url+'\n')
+                    #f.write(each_file['name']+'\n')
+                    #f.write(download_url+'\n')
+                    new_file_list.append = ({
+                        'topic_id': item['topic_id'],
+                        'file_name': each_file['name'],
+                        'file_content': 'hello world!'
+                        })
         elif content_type == 'q&a':
             text = item['question']['text']+'\n'+item['answer']['text']
-            f.write(text+'\n')
-        f.write('\n')
-    f.close()
-    
+            #f.write(text+'\n')
+            new_talk_list.append = ({ 
+                        'topic_id': item['topic_id'],
+                        'create_time': create_time,
+                        'group_id': item['group']['group_id'],
+                        'topic_content': text
+                        })
+        last_time = create_time
+        #f.write('\n')
+    #f.close()
+    #关闭当前tab
     browser.close()
-    browser.switch_to.window(browser.window_handles[no_handles-1])
+    browser.switch_to.window(browser.window_handles[-1])
+    sleep(3)
+    
+    #计算新一页的end_time
+    last_time = last_time + timedelta(microsecond = -1)
+    
+    #打开新tab
+    browser.execute_script("window.open();")
+    handles = browser.window_handles
+    browser.switch_to.window(handles[-1])#[-1]是最新窗口
+    browser.get(group_url)
+    
+    
     return True
 
 if __name__ == "__main__":
