@@ -1,4 +1,4 @@
-#Next Step, 测试翻页，获取下一页url的位置是否要调整？
+#Next Step, 部分纯text的talk内容丢失
 
 from bs4 import BeautifulSoup
 import json
@@ -68,9 +68,9 @@ def html2json(html:str):
     return res
 
 def get_download_url(browser, href):
-    no_handles = len(browser.window_handles)
+#    no_handles = len(browser.window_handles)
     browser.execute_script("window.open();")
-    browser.switch_to.window(browser.window_handles[no_handles])
+    browser.switch_to.window(browser.window_handles[-1])
     browser.get(href)
     json = html2json(browser.page_source)
     i = 0
@@ -79,7 +79,7 @@ def get_download_url(browser, href):
         flag = json['succeeded']
         if flag == True:
             browser.close()
-            browser.switch_to.window(browser.window_handles[no_handles-1])
+            browser.switch_to.window(browser.window_handles[-1])
             return json['resp_data']['download_url']
         else:
             browser.refresh()
@@ -94,7 +94,7 @@ def get_download_url(browser, href):
 #        browser.switch_to.window(browser.window_handles[no_handles-1])
         return False
 
-def fetch_content(browser, group_no, max_page, end_time, start_time):
+def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str):
 #end_time = 抓取的截止时间（包含该时点），start_time = 抓取的开始时间（包含该时点），max_page = 抓取的最大页数
 #browser, group_no, start_time, no_page
 
@@ -120,21 +120,37 @@ def fetch_content(browser, group_no, max_page, end_time, start_time):
 
     正常return
     '''
-
-    start_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20'
-    #db = SqliteDatabase('zsxq.db')
-    db = SqliteDatabase('test.db')
+    
+    newest_time = datetime.strptime(newest_time_str, '%Y-%m-%d %H:%M:%S.%f')
+    if newest_time_str != 'now':
+        if oldest_time_str != 'oldest':
+            oldest_time = datetime.strptime(oldest_time_str, '%Y-%m-%d %H:%M:%S.%f')
+        else:
+            oldest_time = datetime(1970, 1, 1)
+        first_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20&end_time=' + newest_time.strftime('%Y-%m-%dT%H%%3A%M%%3A%S.%f')[:-3]+'%2B0800'
+    elif newest_time_str == 'now':
+        if oldest_time_str != 'oldest':
+            oldest_time = datetime.strptime(oldest_time_str, '%Y-%m-%d %H:%M:%S.%f')
+        else:
+            oldest_time = datetime(1970, 1, 1)
+        first_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20'
+    
+    db = SqliteDatabase('zsxq.db')
+    #db = SqliteDatabase('test.db')
     db.connect()
-    browser.execute_script("window.open();")
-    browser.switch_to.window(browser.window_handles[-1])#[-1]是最新窗口
-    browser.get(start_url)
     
     new_talk_list = []
     new_file_list = []
     last_time = datetime.now()
+    next_url = first_url
     for ii in range(1,max_page+1):
    
-       #获取当前页面json，最多尝试5次，失败则返回异常
+        #打开新tab
+        browser.execute_script("window.open();")
+        browser.switch_to.window(browser.window_handles[-1])
+        browser.get(next_url)
+        
+        #获取当前页面json，最多尝试5次，失败则返回异常
         global json_buffer
         json_buffer = html2json(browser.page_source)
         i = 0
@@ -152,6 +168,11 @@ def fetch_content(browser, group_no, max_page, end_time, start_time):
         if i==5: 
             print("取不到页面内容！")
             print(html2json(browser.page_source))
+            with db.atomic():
+                Topic_test.insert_many(new_talk_list).on_conflict(action='IGNORE').execute()
+                File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
+            db.close()
+            #虽然报错但仍要把缓存写入db
             return False
     
         #获取一次刷新下的所有内容（file类型的不下载）
@@ -163,13 +184,19 @@ def fetch_content(browser, group_no, max_page, end_time, start_time):
             print(create_time)
             #f.write(create_time+'\n')
             if content_type == 'talk':
-                text = item['talk']['text']
-                #f.write(text+'\n')
+                text = ''
+                images_url_list = ''
+                if item['talk'].get('files'):
+                    text = item['talk']['text'] + '\n'
+                    #f.write(text+'\n')
+                elif item['talk'].get('images'):
+                    for each_image in item['talk']['images']:
+                        images_url_list = images_url_list + each_image['large']['url'] + '\n'
                 new_talk_list.append({ 
                             'topic_id': item['topic_id'],
                             'create_time': create_time,
                             'group_id': item['group']['group_id'],
-                            'topic_content': text
+                            'topic_content': text + images_url_list
                             })
                 if item['talk'].get('files'):
                     for each_file in item['talk']['files']:
@@ -181,14 +208,15 @@ def fetch_content(browser, group_no, max_page, end_time, start_time):
                             'file_id': each_file['file_id'],
                             'topic_id': item['topic_id'],
                             'file_name': each_file['name'],
-                            'file_content': 'hello world!'
+                            #'file_content': download_url
+                            'file_content': href
                             })
             elif content_type == 'q&a':
                 text = item['question']['text']+'\n'+item['answer']['text']
                 #f.write(text+'\n')
                 new_talk_list.append({ 
                             'topic_id': item['topic_id'],
-                            'create_time': create_time,
+                            'create_time': create_time+'+0800',
                             'group_id': item['group']['group_id'],
                             'topic_content': text
                             })
@@ -201,31 +229,30 @@ def fetch_content(browser, group_no, max_page, end_time, start_time):
         time.sleep(3)
         
         #计算新一页的url
+        if len(new_talk_list)%20:
+            break
         last_time = last_time + timedelta(microseconds = -1000)
         next_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20&end_time=' + last_time.strftime('%Y-%m-%dT%H%%3A%M%%3A%S.%f')[:-3]+'%2B0800'
-        
-        #打开新tab
-        browser.execute_script("window.open();")
-        browser.switch_to.window(browser.window_handles[-1])
-        browser.get(next_url)
     
     #将内容写入数据库
     
     #以下为测试
     
-    Topic_test.truncate_table(restart_identity=True)
-    File_test.truncate_table(restart_identity=True)
+    #Topic_test.truncate_table(restart_identity=True)
+    #File_test.truncate_table(restart_identity=True)
     
     with db.atomic():
-        Topic_test.insert_many(new_talk_list).execute()
-        File_test.insert_many(new_file_list).execute()
+        Topic_test.insert_many(new_talk_list).on_conflict(action='IGNORE').execute()
+        File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
+    db.close()
     
     return True
 
 if __name__ == "__main__":
     browser = initiate()
     time.sleep(3)
-    fetch_content(browser, 51122528441224, 1, 1, 1)
+    fetch_content(browser, 51122528441224, 1, "2022-03-15 10:17:59.124", "oldest")
+    print('读写完毕')
     time.sleep(999)
     print(link.status_code)
     print(link.content)
