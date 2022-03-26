@@ -1,4 +1,4 @@
-#Next Step, 部分纯text的talk内容丢失
+#Next Step, 先抓他个10页
 
 from bs4 import BeautifulSoup
 import json
@@ -186,7 +186,7 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
             if content_type == 'talk':
                 text = ''
                 images_url_list = ''
-                if item['talk'].get('files'):
+                if item['talk'].get('text'):
                     text = item['talk']['text'] + '\n'
                     #f.write(text+'\n')
                 elif item['talk'].get('images'):
@@ -201,7 +201,8 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
                 if item['talk'].get('files'):
                     for each_file in item['talk']['files']:
                         href = 'https://api.zsxq.com/v2/files/' + str(each_file['file_id']) + '/download_url'
-                        download_url = get_download_url(browser, href) 
+                        #暂时不去get实际的下载连接
+                        #download_url = get_download_url(browser, href) 
                         #f.write(each_file['name']+'\n')
                         #f.write(download_url+'\n')
                         new_file_list.append({
@@ -242,7 +243,7 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
     #File_test.truncate_table(restart_identity=True)
     
     with db.atomic():
-        Topic_test.insert_many(new_talk_list).on_conflict(action='IGNORE').execute()
+        Topic_test.insert_many(new_talk_list).on_conflict(action='REPLACE').execute()
         File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
     db.close()
     
