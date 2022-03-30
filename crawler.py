@@ -1,4 +1,4 @@
-#Next Step, 先抓他个10页
+#Next Step, 学习ES，1周小目标，能完成现有数据库内容文字搜索的POC
 
 from bs4 import BeautifulSoup
 import json
@@ -96,37 +96,13 @@ def get_download_url(browser, href):
 
 def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str):
 #end_time = 抓取的截止时间（包含该时点），start_time = 抓取的开始时间（包含该时点），max_page = 抓取的最大页数
-#browser, group_no, start_time, no_page
-
-    '''该方法return一个数组（状态，记录条数，最早时间，最晚时间）
-    连接数据库
-
-    for iterator < max_page:
-        selenium打开新页面
-        browser.get(get_url(end_time))
-        
-        确保正确打开页面
-        if 此时end_time晚于start_time，则断开数据库连接 正常return
-        get页面上的topics数量
-        如果获取到的topics小于20，是否意味着已经到底？？？则获取完页面后断开数据库连接并return
-        获取该页面上最新时间，if该时间早于start_time，遍历找到晚于等于start_time的最早topics，并更新页面上的topics数量
-        
-        循环处理范围内的topics:talk、Q%A、file_url
-        case: talk & Q&A 查重并写入文本数据库
-        case：file_url 查重并写入url数据库
-        
-        更新end_time
-        selenium关闭页面
-
-    正常return
-    '''
     
-    newest_time = datetime.strptime(newest_time_str, '%Y-%m-%d %H:%M:%S.%f')
     if newest_time_str != 'now':
         if oldest_time_str != 'oldest':
             oldest_time = datetime.strptime(oldest_time_str, '%Y-%m-%d %H:%M:%S.%f')
         else:
             oldest_time = datetime(1970, 1, 1)
+        newest_time = datetime.strptime(newest_time_str, '%Y-%m-%d %H:%M:%S.%f')
         first_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20&end_time=' + newest_time.strftime('%Y-%m-%dT%H%%3A%M%%3A%S.%f')[:-3]+'%2B0800'
     elif newest_time_str == 'now':
         if oldest_time_str != 'oldest':
@@ -139,8 +115,6 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
     #db = SqliteDatabase('test.db')
     db.connect()
     
-    new_talk_list = []
-    new_file_list = []
     last_time = datetime.now()
     next_url = first_url
     for ii in range(1,max_page+1):
@@ -149,6 +123,9 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
         browser.execute_script("window.open();")
         browser.switch_to.window(browser.window_handles[-1])
         browser.get(next_url)
+        new_talk_list = []
+        new_file_list = []
+        end_loop = False
         
         #获取当前页面json，最多尝试5次，失败则返回异常
         global json_buffer
@@ -174,7 +151,8 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
             db.close()
             #虽然报错但仍要把缓存写入db
             return False
-    
+
+        
         #获取一次刷新下的所有内容（file类型的不下载）
         #f = open("data.txt","w+",encoding="utf-8")
         #f.write(str(datetime.now())+'\n')
@@ -217,7 +195,7 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
                 #f.write(text+'\n')
                 new_talk_list.append({ 
                             'topic_id': item['topic_id'],
-                            'create_time': create_time+'+0800',
+                            'create_time': create_time,
                             'group_id': item['group']['group_id'],
                             'topic_content': text
                             })
@@ -229,35 +207,38 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
         browser.switch_to.window(browser.window_handles[-1])
         time.sleep(3)
         
-        #计算新一页的url
+        #判断本轮是否为最后循环
+        if last_time <= Topic_test.select(fn.MAX(Topic_test.create_time)).scalar():
+            end_loop = True
         if len(new_talk_list)%20:
-            break
+            end_loop = True
+        
+        #计算新一页的url
         last_time = last_time + timedelta(microseconds = -1000)
         next_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20&end_time=' + last_time.strftime('%Y-%m-%dT%H%%3A%M%%3A%S.%f')[:-3]+'%2B0800'
     
-    #将内容写入数据库
-    
-    #以下为测试
-    
-    #Topic_test.truncate_table(restart_identity=True)
-    #File_test.truncate_table(restart_identity=True)
-    
-    with db.atomic():
-        Topic_test.insert_many(new_talk_list).on_conflict(action='REPLACE').execute()
-        File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
-    db.close()
+        #将内容写入数据库
+        
+        #以下为测试
+        
+        #Topic_test.truncate_table(restart_identity=True)
+        #File_test.truncate_table(restart_identity=True)
+        
+        time1 = datetime.now()
+        with db.atomic():
+            Topic_test.insert_many(new_talk_list).on_conflict(action='IGNORE').execute()
+            File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
+        db.close()
+        time2 = datetime.now()
+        delta = time2-time1
+        print('写入用时：'+str(delta))
+        
+        if end_loop == True: break
     
     return True
 
 if __name__ == "__main__":
     browser = initiate()
     time.sleep(3)
-    fetch_content(browser, 51122528441224, 1, "2022-03-15 10:17:59.124", "oldest")
+    fetch_content(browser, 51122528441224, 10, "now", "oldest")
     print('读写完毕')
-    time.sleep(999)
-    print(link.status_code)
-    print(link.content)
-    dict_content = json.loads(link.content)
-    print(dict_content)
-    topics_list = dict_content['resp_data']['topics']
-    print(topics)
