@@ -25,7 +25,7 @@ def initiate():
     chrome_options.add_argument('--ignore-ssl-errors')
     chrome_options.add_argument('log-level=3')
 #    chrome_options.add_experimental_option('excludeSwitches', ['enable-automation','enable-logging'])
-    executable_path = "C:\Program Files\Google\Chrome\Application\chromedriver.exe" #注意检查chrome driver版本#
+    executable_path = "C:\Program Files\Google\Chrome\Application\chromedriver.exe" #注意检查chrome driver版本, 必须把#
     index_url = 'https://wx.zsxq.com/'
     mypage_url = 'https://api.zsxq.com/v2/groups/48844244242848/topics?scope=all&count=20' #用自己主页测试#
     chrome_ser = Service(executable_path)
@@ -94,30 +94,60 @@ def get_download_url(browser, href):
 #        browser.switch_to.window(browser.window_handles[no_handles-1])
         return False
 
-def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str):
-#end_time = 抓取的截止时间（包含该时点），start_time = 抓取的开始时间（包含该时点），max_page = 抓取的最大页数
-    
-    if newest_time_str != 'now':
-        if oldest_time_str != 'oldest':
-            oldest_time = datetime.strptime(oldest_time_str, '%Y-%m-%d %H:%M:%S.%f')
-        else:
-            oldest_time = datetime(1970, 1, 1)
-        newest_time = datetime.strptime(newest_time_str, '%Y-%m-%d %H:%M:%S.%f')
-        first_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20&end_time=' + newest_time.strftime('%Y-%m-%dT%H%%3A%M%%3A%S.%f')[:-3]+'%2B0800'
-    elif newest_time_str == 'now':
-        if oldest_time_str != 'oldest':
-            oldest_time = datetime.strptime(oldest_time_str, '%Y-%m-%d %H:%M:%S.%f')
-        else:
-            oldest_time = datetime(1970, 1, 1)
-        first_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20'
-    
+def stream_out(log):
+    if(log['status'] == True):
+        print('读取'+str(log['update_group'])+'成功！情况如下：')
+        print('共读取talks '+str(log['update_topic_number'])+'条')
+        print('共读取files '+str(log['update_file_number'])+'条')
+        new_time = datetime.strftime(log['new_time'], '%Y-%m-%d %H:%M:%S.%f')[:-3]
+        old_time = datetime.strftime(log['old_time'], '%Y-%m-%d %H:%M:%S.%f')[:-3]
+        print('从'+old_time+'到'+new_time)
+    else:
+        print('读取失败！')
+
+def fetch_content(browser, group_no:str, max_page, newest_time_str, oldest_time_str):
+#end_time = 抓取的截止时间（包含该时点），start_time = 抓取的开始时间（包含该时点），时间，max_page = 抓取的最大页数
+ 
+    log = {
+        "status": False,
+        "update_group": group_no,
+        "update_topic_number" : 0,
+        "update_file_number" : 0,
+        "new_time" : datetime.now(),
+        "old_time" : datetime.now()
+        }
     db = SqliteDatabase('zsxq.db')
     #db = SqliteDatabase('test.db')
     db.connect()
     
+    ACTION = ''
+    end_condition = ''
+    create_time_list = []
+    MileStone = datetime.now()
     last_time = datetime.now()
+    
+    if newest_time_str != 'now':
+        if oldest_time_str != 'oldest':
+            oldest_time = datetime.strptime(oldest_time_str, '%Y-%m-%d %H:%M:%S.%f')
+        elif oldest_time_str == 'oldest':
+            oldest_time = datetime(1970, 1, 1)
+            ACTION = 'ToLast'
+            MileStone = datetime(1970, 1, 1)
+        newest_time = datetime.strptime(newest_time_str, '%Y-%m-%d %H:%M:%S.%f')
+        first_url = 'https://api.zsxq.com/v2/groups/' + group_no+'/topics?scope=all&count=20&end_time=' + newest_time.strftime('%Y-%m-%dT%H%%3A%M%%3A%S.%f')[:-3]+'%2B0800'
+    elif newest_time_str == 'now':
+        if oldest_time_str != 'oldest':
+            oldest_time = datetime.strptime(oldest_time_str, '%Y-%m-%d %H:%M:%S.%f')
+        elif oldest_time_str == 'oldest':
+            oldest_time = datetime(1970, 1, 1)
+            ACTION = 'UpToDate'
+            MileStone = Topic_test.select(fn.MAX(Topic_test.create_time)).where(Topic_test.group_id == group_no).scalar()
+            if MileStone == None:
+                MileStone = datetime(1970, 1, 1)
+        first_url = 'https://api.zsxq.com/v2/groups/' + group_no+'/topics?scope=all&count=20'
+    
     next_url = first_url
-    for ii in range(1,max_page+1):
+    for page in range(1,max_page+1):
    
         #打开新tab
         browser.execute_script("window.open();")
@@ -125,7 +155,6 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
         browser.get(next_url)
         new_talk_list = []
         new_file_list = []
-        end_loop = False
         
         #获取当前页面json，最多尝试5次，失败则返回异常
         global json_buffer
@@ -145,13 +174,16 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
         if i==5: 
             print("取不到页面内容！")
             print(html2json(browser.page_source))
-            with db.atomic():
-                Topic_test.insert_many(new_talk_list).on_conflict(action='IGNORE').execute()
-                File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
             db.close()
-            #虽然报错但仍要把缓存写入db
-            return False
+            return log
 
+        if topics == []:
+            end_condition = 'BlankPage'
+            print('终止原因：' + end_condition)
+            browser.close()
+            browser.switch_to.window(browser.window_handles[-1])
+            db.close()
+            break
         
         #获取一次刷新下的所有内容（file类型的不下载）
         #f = open("data.txt","w+",encoding="utf-8")
@@ -159,6 +191,7 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
         for item in topics:
             content_type = item['type']
             create_time = datetime.strptime(item['create_time'], "%Y-%m-%dT%H:%M:%S.%f+0800")
+            create_time_list.append(create_time)
             print(create_time)
             #f.write(create_time+'\n')
             if content_type == 'talk':
@@ -187,6 +220,7 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
                             'file_id': each_file['file_id'],
                             'topic_id': item['topic_id'],
                             'file_name': each_file['name'],
+                            'file_create_time': datetime.strptime(each_file['create_time'], "%Y-%m-%dT%H:%M:%S.%f+0800"),
                             #'file_content': download_url
                             'file_content': href
                             })
@@ -208,37 +242,48 @@ def fetch_content(browser, group_no, max_page, newest_time_str, oldest_time_str)
         time.sleep(3)
         
         #判断本轮是否为最后循环
-        if last_time <= Topic_test.select(fn.MAX(Topic_test.create_time)).scalar():
-            end_loop = True
+        if last_time <= MileStone:
+            print(last_time)
+            print(MileStone)
+            print("已经追平最新时间")
+            end_condition = 'CaughtUp'
         if len(new_talk_list)%20:
-            end_loop = True
+            print("已经翻到最后一页！")
+            end_condition = 'LastPage'
         
         #计算新一页的url
         last_time = last_time + timedelta(microseconds = -1000)
         next_url = 'https://api.zsxq.com/v2/groups/' + str(group_no)+'/topics?scope=all&count=20&end_time=' + last_time.strftime('%Y-%m-%dT%H%%3A%M%%3A%S.%f')[:-3]+'%2B0800'
     
-        #将内容写入数据库
+        #将一页（最多20条）内容写入数据库
         
         #以下为测试
-        
         #Topic_test.truncate_table(restart_identity=True)
         #File_test.truncate_table(restart_identity=True)
         
-        time1 = datetime.now()
         with db.atomic():
-            Topic_test.insert_many(new_talk_list).on_conflict(action='IGNORE').execute()
-            File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
+            log['status'] = True
+            new_topic_number = Topic_test.insert_many(new_talk_list).on_conflict(action='IGNORE').execute()
+            log['update_topic_number'] += new_topic_number
+            new_file_number = File_test.insert_many(new_file_list).on_conflict(action='IGNORE').execute()
+            log['update_file_number'] += new_file_number
+            log['new_time'] = max(create_time_list)
+            log['old_time'] = min(create_time_list)
         db.close()
-        time2 = datetime.now()
-        delta = time2-time1
-        print('写入用时：'+str(delta))
         
-        if end_loop == True: break
+        #这里是结束循环的唯一控制器
+        if end_condition == 'CaughtUp' or end_condition == 'LastPage':
+            print('终止原因：' + end_condition)
+            break
+
+    if end_condition != 'CaughtUp' and end_condition != 'LastPage' and end_condition != 'BlankPage':
+        end_condition = 'MaxPage'
+        print('终止原因：' + end_condition)
     
-    return True
+    return log
 
 if __name__ == "__main__":
     browser = initiate()
     time.sleep(3)
-    fetch_content(browser, 51122528441224, 10, "now", "oldest")
-    print('读写完毕')
+    new_log = fetch_content(browser, str(51122528441224), 50, "now", "oldest")
+    stream_out(new_log)
